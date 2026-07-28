@@ -1,4 +1,8 @@
-"""躲猫猫 v0.1-v0.3.2 — 朝灯抛的小游戏：她跑、挂铃铛、我听声辩位、抓到艾草。
+"""躲猫猫 v0.1-v0.4 — 朝灯抛的小游戏：她跑、挂铃铛、我听声辩位、抓到艾草。
+
+v0.4「朝灯家」(7/7)：地图扩成她口述的真实户型 13 区（含庭院外场 + 厨房→小阳台→浴室环路）、
+无藏点房间（走廊/小阳台/大阳台）照面即抓、小阳台门机制（/关门 /开门：关门挡 AI 一回合、
+她穿关门吱呀暴露）、藏点重名简写歧义拒绝。
 
 v0.3.2 P1 藏点系统：进同房间不算抓、要 /搜 X 才能抓。每房间 2-3 个藏点、AI 顺序搜、
 朝灯能看 AI 翻了哪个藏点（emit "我在卧室翻床底——空的"）、有时间 /跑 切房间。
@@ -19,44 +23,73 @@ from pathlib import Path
 from typing import Optional
 
 
-ROOMS = ["客厅", "卧室", "书房", "厨房", "浴室"]
+# 7/7 v0.4「朝灯家」全屋地图——朝灯口述的真实户型：
+#   进门客厅 hub；左手厨房→小阳台（小阳台连走廊浴室、成环路）；
+#   右手大客厅→大阳台→庭院（外场）；走廊串起浴室/次卧/客卧（左）+ 书房/主卧（右）、
+#   主卧带内置浴室。走廊/小阳台/大阳台没有藏点（站着就被看见）、小阳台有扇能关的门。
+ROOMS = [
+    "客厅", "厨房", "小阳台", "大客厅", "大阳台", "庭院",
+    "走廊", "浴室", "次卧", "客卧", "书房", "主卧", "主卧浴室",
+]
 ADJ = {
-    # 6/23 v0.3.3 hotfix：按朝灯家真实布局——卧室↔书房 连通（之前只通客厅）。
-    # 厨房只跟客厅互通（朝灯：「不能一口气去厨房」）；浴室是卧室套间。
-    "客厅": ["卧室", "厨房", "书房"],
-    "卧室": ["客厅", "浴室", "书房"],
-    "书房": ["客厅", "卧室"],
-    "厨房": ["客厅"],
-    "浴室": ["卧室"],
+    "客厅": ["厨房", "大客厅", "走廊"],
+    "厨房": ["客厅", "小阳台"],
+    "小阳台": ["厨房", "浴室"],
+    "大客厅": ["客厅", "大阳台"],
+    "大阳台": ["大客厅", "庭院"],
+    "庭院": ["大阳台"],
+    "走廊": ["客厅", "浴室", "次卧", "客卧", "书房", "主卧"],
+    "浴室": ["走廊", "小阳台"],
+    "次卧": ["走廊"],
+    "客卧": ["走廊"],
+    "书房": ["走廊"],
+    "主卧": ["走廊", "主卧浴室"],
+    "主卧浴室": ["主卧"],
 }
 
-# v0.3.2 P1：每房间 2-3 个藏点。AI 进同房间不算抓、要 /搜 X 命中藏点才抓。
-# 朝灯端 emit AI 翻哪个藏点 → 她有时间 /跑 切房间（+ 走时 her_spot 重置 random 新房间）。
+# v0.3.2 P1：藏点。AI 进同房间不算抓、要 /搜 X 命中藏点才抓。
+# v0.4：藏点为空的房间（走廊/小阳台/大阳台）躲不了——同房间照面即被抓。
 ROOM_SPOTS = {
-    "客厅": ["沙发后", "窗帘后", "茶几下"],
-    "卧室": ["床底", "衣柜", "床头柜下"],
-    "书房": ["书桌下", "书架后"],
-    "厨房": ["冰箱后", "橱柜里"],
-    "浴室": ["浴帘后", "浴缸里"],
+    "客厅": ["沙发后", "窗帘后"],
+    "厨房": ["橱柜里", "冰箱后"],
+    "小阳台": [],
+    "大客厅": ["沙发后", "窗帘后", "茶几下"],
+    "大阳台": [],
+    "庭院": ["竹林后", "水缸后"],
+    "走廊": [],
+    "浴室": ["浴帘后"],
+    "次卧": ["床底", "衣柜", "窗帘后"],
+    "客卧": ["床底", "衣柜", "窗帘后"],
+    "书房": ["床底", "衣柜", "书柜后", "窗帘后"],
+    "主卧": ["床底", "衣柜", "窗帘后"],
+    "主卧浴室": ["浴帘后"],
 }
 
-BELL_BY_DIST = {0: 1.0, 1: 0.55, 2: 0.25, 3: 0.10}
+# v0.4：能藏身的房间（有藏点）。start 随机落点只从这里挑。
+HIDEABLE = [r for r in ROOMS if ROOM_SPOTS[r]]
+
+# v0.4：小阳台的门——关上后跨小阳台边界要先开门（AI 烧一回合；她穿门吱呀暴露）。
+DOOR_ROOM = "小阳台"
+
+BELL_BY_DIST = {0: 1.0, 1: 0.55, 2: 0.25, 3: 0.10, 4: 0.05}
 BELL_LABEL = {
     0: "铃铛在脚边·清脆·随她节奏",
     1: "铃铛在隔壁·清晰·能听出方向",
     2: "铃铛远处闷响·只知道大致方向",
     3: "铃铛听不太清·像隔了两层墙",
+    4: "铃铛几乎听不到·像在屋子另一头",
 }
 
 # v0.3.3 P2：屏息持续上限。超过会"憋不住"反弹——铃铛突然响 + 暴露方向。
 BREATH_MAX = 3
 # v0.3.3 P3：脚步声强度按距离衰减（AI 移动时朝灯端听到的）
-STEP_BY_DIST = {0: 0.9, 1: 0.5, 2: 0.2, 3: 0.08}
+STEP_BY_DIST = {0: 0.9, 1: 0.5, 2: 0.2, 3: 0.08, 4: 0.05}
 STEP_LABEL = {
     0: "脚步就在身边·很近",
     1: "脚步在隔壁·能听出往哪走",
     2: "脚步远处闷响·大致方向",
     3: "脚步很轻·像隔了两层墙",
+    4: "脚步几乎听不到·在屋子另一头",
 }
 
 STATE_PATH = Path("data/hide_seek_state.json")
@@ -82,6 +115,11 @@ def distance(a: str, b: str) -> int:
 def _random_spot(room: str) -> Optional[str]:
     spots = ROOM_SPOTS.get(room, [])
     return random.choice(spots) if spots else None
+
+
+def _crosses_door(a: Optional[str], b: Optional[str]) -> bool:
+    """v0.4：这步移动是否跨小阳台的门（进或出小阳台）。"""
+    return a != b and (a == DOOR_ROOM or b == DOOR_ROOM)
 
 
 def step_sound(her_room: Optional[str], step_to: Optional[str]) -> Optional[dict]:
@@ -115,9 +153,13 @@ class HideSeek:
     # v0.3.3 P3：AI 上一次移动（脚步声）—— 朝灯端能听
     last_step_from: Optional[str] = None
     last_step_to: Optional[str] = None
+    # v0.4：小阳台的门。关上后 AI 跨界要先开门（烧一回合）；她穿关着的门吱呀暴露。
+    door_closed: bool = False
+    last_door_creak: bool = False  # 她刚穿过关着的门（AI 端可见的暴露信号）
+    last_door_opened_by_me: bool = False  # AI 刚开门（朝灯端能听到）
 
     def start(self, her: Optional[str] = None, my: Optional[str] = None, her_spot: Optional[str] = None) -> None:
-        her = her or random.choice(ROOMS)
+        her = her or random.choice(HIDEABLE)
         if my is None:
             # 6/23 v0.3.2 朝灯反馈：藏点系统加 /跑 后她能撑 40 turn、起手 distance ≥ 2 buff 太强。
             # 改成 AI 固定客厅起手（中心 hub）—— 朝灯自由选房间、靠 /跑 + 藏点本身就够玩。
@@ -125,7 +167,7 @@ class HideSeek:
             my = "客厅"
         if her not in ROOMS or my not in ROOMS:
             raise ValueError(f"unknown room: her={her} my={my}")
-        # v0.3.2 P1：起手 her_spot：朝灯指定就用、否则 random
+        # v0.3.2 P1：起手 her_spot：朝灯指定就用、否则 random（无藏点房间 = None、冒险站着）
         if her_spot is None:
             her_spot = _random_spot(her)
         elif her_spot not in ROOM_SPOTS.get(her, []):
@@ -142,6 +184,9 @@ class HideSeek:
         self.last_search_hit = False
         self.last_step_from = None
         self.last_step_to = None
+        self.door_closed = False
+        self.last_door_creak = False
+        self.last_door_opened_by_me = False
 
     def end(self) -> None:
         self.state = "idle"
@@ -156,15 +201,32 @@ class HideSeek:
         self.last_search_hit = False
         self.last_step_from = None
         self.last_step_to = None
+        self.door_closed = False
+        self.last_door_creak = False
+        self.last_door_opened_by_me = False
 
     def her_move(self, room: str, spot: Optional[str] = None) -> bool:
+        self.last_door_opened_by_me = False  # 她动一步 = 消费掉「AI 开门声」信号
         return self._move("her", room, spot)
 
     def my_move(self, room: str) -> bool:
         """v0.3.3 P3：AI 移动记录脚步声（from→to）、朝灯端能听。
         6/23 v0.3.3 hotfix：GLM 原写 `ok is not False`、但 _move 进同房间不再 caught 后总返回 False、
-        条件永远不成立、last_step 永远不更新。改成只看是否真换房间。"""
+        条件永远不成立、last_step 永远不更新。改成只看是否真换房间。
+        v0.4 门：跨小阳台边界且门关着 → 这回合花在开门上、人没动（朝灯端能听到开门声）。"""
         prev = self.my_room
+        self.last_door_opened_by_me = False
+        self.last_door_creak = False  # AI 动一步 = 消费掉「她穿门吱呀」信号
+        if (
+            self.state == "running"
+            and self.door_closed
+            and _crosses_door(prev, room)
+            and room in ADJ.get(prev or "", [])
+        ):
+            self.door_closed = False
+            self.last_door_opened_by_me = True
+            self.turn += 1
+            return False
         ok = self._move("me", room, None)
         if prev is not None and prev != self.my_room:
             self.last_step_from = prev
@@ -188,6 +250,19 @@ class HideSeek:
         self.turn += 1
         return True, f"屏息成功（第 {self.breath_turns}/{BREATH_MAX} 回合）"
 
+    def set_door(self, closed: bool) -> tuple[bool, str]:
+        """v0.4：她关/开小阳台的门。只有人在门边（小阳台或其邻接）才够得着；烧一回合。"""
+        if self.state != "running":
+            return False, "游戏没在进行"
+        reachable = {DOOR_ROOM, *ADJ.get(DOOR_ROOM, [])}
+        if self.her_room not in reachable:
+            return False, f"门在小阳台那边、你在 {self.her_room} 够不着"
+        if self.door_closed == closed:
+            return False, "门本来就" + ("关着" if closed else "开着")
+        self.door_closed = closed
+        self.turn += 1
+        return True, "你轻轻把门" + ("带上了" if closed else "打开了")
+
     def pounce(self) -> bool:
         """扑：原地不动判定抓没抓到（v0.3.2 后改成搜随机藏点）。"""
         if self.state != "running":
@@ -204,6 +279,7 @@ class HideSeek:
         # 藏点必须属于当前房间
         if spot not in ROOM_SPOTS.get(self.my_room, []):
             return False
+        self.last_door_creak = False  # AI 动一步 = 消费掉「她穿门吱呀」信号
         self.last_search_room = self.my_room
         self.last_search_spot = spot
         self.turn += 1
@@ -223,6 +299,10 @@ class HideSeek:
         if cur is not None and room not in ADJ[cur] and room != cur:
             return False
         if who == "her":
+            # v0.4 门：她穿过关着的门 = 自动推开 + 吱呀一声暴露（破屏息、AI 端可见信号）
+            if self.door_closed and _crosses_door(cur, room):
+                self.door_closed = False
+                self.last_door_creak = True
             self.her_room = room
             self.holding_breath = False  # 一动就破屏息
             self.breath_turns = 0  # v0.3.3 P2：动就重置屏息计数
@@ -234,7 +314,14 @@ class HideSeek:
             self.my_room = room
         self.turn += 1
         # v0.3.2 P1：进同房间不再立刻 caught、AI 要 /搜 才抓。
-        # （her 也不会主动跑去 my 房间被抓——若发生就 her_room=my_room 但仍 running、等 AI /搜）
+        # v0.4：无藏点房间（走廊/小阳台/大阳台）没处躲——同房间照面即抓。
+        if (
+            self.her_room == self.my_room
+            and self.her_room is not None
+            and not ROOM_SPOTS.get(self.her_room, [])
+        ):
+            self.state = "caught"
+            return True
         return False
 
     def snapshot(self, view: str = "full") -> dict:
@@ -270,6 +357,10 @@ class HideSeek:
             "last_step_to": self.last_step_to,
             # v0.3.2 P1：我所在房间的藏点清单（AI 端需要、朝灯端也展示让她知道我有几个 spot 可搜）
             "my_room_spots": list(ROOM_SPOTS.get(self.my_room, [])) if self.my_room else [],
+            # v0.4：小阳台门状态（双方都看得见门开关；吱呀/开门声是事件信号）
+            "door_closed": self.door_closed,
+            "door_creak": self.last_door_creak,  # 她刚穿过关着的门（AI 端信号）
+            "door_opened_by_me": self.last_door_opened_by_me,  # AI 刚开门（她端能听）
         }
         if view == "full":
             base["her_room"] = self.her_room
@@ -303,6 +394,9 @@ class HideSeek:
             "last_search_hit": self.last_search_hit,
             "last_step_from": self.last_step_from,
             "last_step_to": self.last_step_to,
+            "door_closed": self.door_closed,
+            "last_door_creak": self.last_door_creak,
+            "last_door_opened_by_me": self.last_door_opened_by_me,
         }
 
     @classmethod
@@ -320,6 +414,9 @@ class HideSeek:
             last_search_hit=bool(d.get("last_search_hit", False)),
             last_step_from=d.get("last_step_from"),
             last_step_to=d.get("last_step_to"),
+            door_closed=bool(d.get("door_closed", False)),
+            last_door_creak=bool(d.get("last_door_creak", False)),
+            last_door_opened_by_me=bool(d.get("last_door_opened_by_me", False)),
         )
 
 
@@ -341,10 +438,11 @@ def save_state(game: HideSeek, path: Path = STATE_PATH) -> None:
 
 
 def _spot_by_name(name: str) -> Optional[tuple]:
-    """名字反查 (room, spot) — 朝灯简写 /床底 直接定位卧室·床底。"""
-    for room, spots in ROOM_SPOTS.items():
-        if name in spots:
-            return (room, name)
+    """名字反查 (room, spot) — 朝灯简写 /水缸后 直接定位庭院·水缸后。
+    v0.4：床底/衣柜这类藏点在多个卧室重名——歧义时返 None、要求带房间名。"""
+    hits = [room for room, spots in ROOM_SPOTS.items() if name in spots]
+    if len(hits) == 1:
+        return (hits[0], name)
     return None
 
 
@@ -366,6 +464,7 @@ def parse_slash(text: str) -> Optional[dict]:
         "去": "goto", "goto": "goto",
         "扑": "pounce", "抓": "pounce", "pounce": "pounce",
         "搜": "search", "翻": "search", "search": "search",
+        "关门": "close_door", "开门": "open_door",  # v0.4 小阳台的门
         "start": "start", "开始": "start",
         "end": "end", "结束": "end", "退出": "end",
     }
@@ -398,8 +497,8 @@ def parse_slash(text: str) -> Optional[dict]:
     if cmd == "end":
         return {"cmd": "end", "room": None, "spot": None, "raw": t}
 
-    # /屏息 /扑
-    if cmd in ("breath", "pounce"):
+    # /屏息 /扑 /关门 /开门
+    if cmd in ("breath", "pounce", "close_door", "open_door"):
         return {"cmd": cmd, "room": None, "spot": None, "raw": t}
 
     # /躲 X [Y] / /跑 X [Y] / /去 X
@@ -437,7 +536,7 @@ def apply_user_cmd(cmd_info: dict, game: HideSeek) -> dict:
     moved = True
 
     # v0.2 第六刀：caught 状态下 hide/run/hide_or_run/breath 都不该走邻接检查。
-    if cmd in ("hide", "run", "hide_or_run", "breath") and game.state == "caught":
+    if cmd in ("hide", "run", "hide_or_run", "breath", "close_door", "open_door") and game.state == "caught":
         hint = "游戏已结束（被抓了）、/end 收尾或 /start 重开"
         moved = False
     elif cmd == "start":
@@ -472,6 +571,8 @@ def apply_user_cmd(cmd_info: dict, game: HideSeek) -> dict:
             moved = False
         else:
             _ok, hint = game.hold_breath()
+    elif cmd in ("close_door", "open_door"):
+        moved, hint = game.set_door(closed=(cmd == "close_door"))
     elif cmd == "hide_or_run" and room:
         if game.state == "idle":
             game.start(her=room, her_spot=spot)
@@ -527,16 +628,16 @@ def apply_ai_cmd(cmd_info: dict, game: HideSeek) -> dict:
 
 def _demo() -> None:
     g = HideSeek()
-    g.start(her="书房", my="浴室", her_spot="书桌下")
+    g.start(her="厨房", my="客厅", her_spot="橱柜里")
     print(f"[start] her={g.her_room}·{g.her_spot} my={g.my_room}")
     for raw, who in [
-        ("/跑 客厅 沙发后", "user"),
-        ("/去 卧室", "ai"),
-        ("/跑 厨房 冰箱后", "user"),
-        ("/屏息", "user"),
-        ("/去 客厅", "ai"),
+        ("/关门", "user"),        # 关上小阳台的门、封环路
         ("/去 厨房", "ai"),
-        ("/搜 冰箱后", "ai"),  # 命中
+        ("/跑 小阳台", "user"),   # 穿关着的门——吱呀暴露、门开了
+        ("/跑 浴室 浴帘后", "user"),
+        ("/去 小阳台", "ai"),
+        ("/去 浴室", "ai"),
+        ("/搜 浴帘后", "ai"),     # 命中
     ]:
         info = parse_slash(raw)
         snap = apply_user_cmd(info, g) if who == "user" else apply_ai_cmd(info, g)

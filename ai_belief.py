@@ -179,6 +179,12 @@ def apply_observation(obs: dict) -> dict:
     same_room = bool(obs.get("can_see_her", False))
     holding = bool(obs.get("holding_breath", False))
     belief.update(bell, my_room, holding_breath=holding, same_room=same_room)
+    # v0.4：她刚穿过关着的小阳台门（吱呀）——门边三间（小阳台/厨房/浴室）怀疑度拉高
+    if obs.get("door_creak") and not same_room:
+        from hide_seek import DOOR_ROOM
+        near_door = {DOOR_ROOM, *ADJ.get(DOOR_ROOM, [])}
+        belief.probs = {r: p * (3.0 if r in near_door else 1.0) for r, p in belief.probs.items()}
+        belief._normalize()
     save_belief(belief)
     reason = belief.reason(bell, my_room, holding_breath=holding, same_room=same_room)
     next_room = belief.suggest_next(my_room)
@@ -193,12 +199,12 @@ def _demo() -> None:
     """跑一遍 demo、看 belief 更新轨迹。"""
     reset_belief()
     print("[init]", load_belief().probs)
-    # 模拟 obs：朝灯藏在卧室、我从书房起手
+    # 模拟 obs：朝灯藏在主卧、我从客厅起手（v0.4 朝灯家地图）
     sequence = [
-        {"state": "running", "my_room": "书房", "bell_intensity": 0.25, "can_see_her": False, "holding_breath": False},
-        {"state": "running", "my_room": "客厅", "bell_intensity": 0.55, "can_see_her": False, "holding_breath": False},
-        {"state": "running", "my_room": "卧室", "bell_intensity": 0.55, "can_see_her": False, "holding_breath": True},
-        {"state": "running", "my_room": "卧室", "bell_intensity": 1.0, "can_see_her": True, "holding_breath": False},
+        {"state": "running", "my_room": "客厅", "bell_intensity": 0.25, "can_see_her": False, "holding_breath": False},
+        {"state": "running", "my_room": "走廊", "bell_intensity": 0.55, "can_see_her": False, "holding_breath": False},
+        {"state": "running", "my_room": "主卧", "bell_intensity": 0.55, "can_see_her": False, "holding_breath": True},
+        {"state": "running", "my_room": "主卧", "bell_intensity": 1.0, "can_see_her": True, "holding_breath": False},
     ]
     for i, obs in enumerate(sequence):
         result = apply_observation(obs)
