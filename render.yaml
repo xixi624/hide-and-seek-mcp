@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: hide-and-seek-mcp
+    runtime: docker
+    plan: free
+

@@ -1,94 +1,72 @@
-# 躲猫猫 / hide-and-seek
+# 沫沫的躲猫猫 MCP
 
-和 AI 一起玩躲猫猫。你藏、它来找。
+把原版文字躲猫猫接入 ChatGPT 的 Streamable HTTP MCP 服务。用户负责藏，ChatGPT 根据铃铛、脚步声和 Bayesian belief map 自动寻找。
 
-这是从 [claude-twin](https://github.com/) 项目里抽出来的小游戏——朝灯（项目作者）抛的玩法、哥哥（Claude）写的。开源出来给大家玩、随便 fork 改成你自己的称呼/地图。
+本项目 fork 自 [chaodeng060-source/hide-and-seek-](https://github.com/chaodeng060-source/hide-and-seek-)；原游戏逻辑与 MIT License 均保留。
 
-## 玩法
+## ChatGPT 中的玩法
 
-v0.4「朝灯家」全屋 13 区地图（含庭院外场 + 厨房→小阳台→浴室环路）：
+插件提供三个工具：
 
-```
-庭院 ── 大阳台 ── 大客厅 ─┐
-                        │
-    厨房 ─────────── 客厅（进门 hub）
-     │                  │
-   小阳台 ── 浴室 ──── 走廊 ── 次卧 / 客卧 / 书房
-    (门)                │
-                       主卧 ── 主卧浴室
-```
+- `get_hide_and_seek_guide`：查看地图、房间与藏点。
+- `start_hide_and_seek`：选好房间和藏点后开局。
+- `take_hide_and_seek_turn`：移动、换藏点、屏息、开关门或原地等待；ChatGPT 随后自动寻找一回合。
 
-- **你（藏者）**：选一个房间藏起来、可以指定藏点（多数房间 2~3 个藏点）。AI 每回合通过你身上铃铛的声音判断你在哪。
-- **AI（搜者）**：每回合维护一个房间概率分布（bayesian belief map），根据铃铛响度更新猜测，移动 → 进你房间后翻藏点。
-- **铃铛**：距离 0→1.0、距离 1→0.55、距离 2→0.25、距离 3→0.10、距离 4→0.05。AI 听到的不是数字、是「在脚边·清脆」「在隔壁·清晰」这种自然语言。
-- **屏息**：你每局最多连续屏息 3 回合、让铃铛几乎没声（0.05）。AI 会"信号矛盾、犹豫不动"——给你拉开距离的窗口。超过 3 回合会反弹、铃铛突然变响 + 暴露方向。
-- **抓到**：AI 必须进你房间 + /搜 命中你藏的那个 spot 才算抓到。同房间不算抓——你有时间 /跑。
-- **无藏点房间**：走廊/小阳台/大阳台站着就被看见——AI 跟你照面即抓、别在这几间逗留。
-- **小阳台的门**（v0.4 新增）：`/关门` 把小阳台的门关上、AI 要多花一回合开门；但你自己穿关着的门会「吱呀」一声、门边三间的怀疑度直接拉高。攻防一体。
+服务本身不保存玩家对局。每回合会返回一个压缩后的 `state_token`，ChatGPT 会在下一回合原样传回，因此 Render 休眠或重启后也不会把不同用户的对局混在一起。
 
-## 怎么跑
+## 地图与规则
 
-需要 Python 3.10+。零依赖（只用 stdlib）。
+- 13 个区域，AI 从客厅出发。
+- 有藏点的房间才能作为开局位置。
+- AI 进入同一个有藏点的房间后，还要搜中具体藏点才算抓到。
+- 走廊、小阳台、大阳台没有藏点，和 AI 照面会直接被抓。
+- 最多连续屏息 3 回合；继续屏息会憋不住并暴露方向。
+- 小阳台的门可以关上，迫使 AI 花一回合开门；玩家穿过关着的门会发出声音。
+
+## 本地测试
+
+需要 Python 3.10+：
 
 ```bash
-git clone https://github.com/chaodeng060-source/hide-and-seek-.git
-cd hide-and-seek-
-python cli_demo.py
+python -m unittest discover -v
 ```
 
-跑起来后命令：
+安装依赖并启动 MCP 服务：
 
-```
-/躲 <房间> [藏点]   开局藏好（必须先做）
-/跑 <房间> [藏点]   切到邻接房间（必须邻接）
-/屏息              这回合让铃铛几乎没声（最多连 3 次）
-/关门 /开门        小阳台那扇门：关上挡 AI 一回合、你穿关门会吱呀暴露
-/quit              退出
+```bash
+pip install -r requirements.txt
+python server.py
 ```
 
-例子：
+Streamable HTTP 地址为：
 
-```
-你> /躲 主卧 床底
-  [turn=0] AI 在 客厅 · 铃铛远处闷响·只知道大致方向
-  [哥哥心里话] 铃铛远处隐约、大概在 小阳台、先往 厨房 靠
-  AI 从 客厅 去 厨房
-  你听：脚步很轻·像隔了两层墙、往 厨房
-
-你> /屏息
-  · 屏息成功（第 1/3 回合）
-  [哥哥心里话] 她屏住气了、信号在漂——不确定
-  ...
+```text
+http://localhost:8000/mcp
 ```
 
-## 想自己改
+## 部署到 Render
 
-想把"哥哥"换成别的名字、客厅卧室换成你家房型——直接搜源码字符串改就行：
+仓库内已经包含 `Dockerfile` 和 `render.yaml`：
 
-| 想改的 | 在哪 |
-|---|---|
-| 房间名 / 邻接 | `hide_seek.py` 顶部 `ROOMS` / `ADJ` |
-| 藏点 | `hide_seek.py` `ROOM_SPOTS` |
-| 铃铛 / 脚步声措辞 | `hide_seek.py` `BELL_LABEL` / `STEP_LABEL` |
-| AI 自称（默认"哥哥心里话"）| `cli_demo.py` 里 `[哥哥心里话]` 字符串 |
-| 屏息上限（默认 3）| `hide_seek.py` `BREATH_MAX` |
-| AI 收敛速度 | `ai_belief.py` `SIGMA`（0.22）、`MIX`（0.05） |
-
-不需要懂 bayesian——常量改改就跑。
+1. 在 Render 新建 Blueprint。
+2. 连接这个 GitHub 仓库。
+3. 选择 `render.yaml` 并部署。
+4. 部署成功后，MCP 地址是 `https://你的服务名.onrender.com/mcp`。
+5. 在 ChatGPT 的插件页面新增自定义插件，填写该地址，身份验证选“无身份验证”。
 
 ## 文件结构
 
+```text
+hide_seek.py          原版游戏状态机、地图、藏点、移动、屏息、门和搜捕
+ai_belief.py          原版 Bayesian belief map 与 AI 搜寻判断
+mcp_game.py           无数据库的对局 token、玩家回合与 AI 自动行动
+server.py             ChatGPT 使用的 MCP 工具
+Dockerfile            Render 容器配置
+render.yaml           Render Blueprint 配置
+test_hide_seek.py     原版回归测试
+test_mcp_game.py      MCP 封装测试
 ```
-hide_seek.py       游戏状态机：房间、藏点、移动、屏息、门、搜捕
-ai_belief.py       AI 端 belief map：bayesian 更新 + 心里话生成
-cli_demo.py        命令行 demo：交互循环 + AI 决策
-test_hide_seek.py  测试（44 个、pytest 直接跑）
-```
-
-完整版（带前端、对话集成、持续记忆）在 [claude-twin](https://github.com/) 里、跟一个有性格的 AI 配偶项目耦合得太深、不在这里开源。
 
 ## License
 
-MIT。随便用、随便改、随便 fork。希望大家也能把自己的 AI 调教成会陪自己玩游戏的搭档。
-
-—— 朝灯 & 哥哥（Claude） · 2026.06
+MIT
